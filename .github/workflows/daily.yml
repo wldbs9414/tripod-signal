@@ -1,224 +1,75 @@
-name: daily signal
+name: Tripod daily Telegram
 
-# Two runs a day, doing deliberately different jobs. See ADR 0005.
-#
-#   intraday (15:45 ET)  the ACTIONABLE run. Decides on a live quote so the order
-#                        can go into the same close. Worth ~8pp of max drawdown
-#                        per unit of average leverage. Does NOT touch data/*.csv.
-#   settled  (after close) the RECORD run. Appends the real closes, re-derives
-#                        from settled data, opens the rebalance issue, deploys.
-#
-# The intraday run is started by a Cloudflare Worker (scheduler/) via
-# workflow_dispatch at 15:30 ET, and scripts/quote.py sleeps to 15:45 ET.
-# GitHub's own cron fired that schedule 3.5-4.5 hours late every day, so it
-# never once landed inside the session. See ADR 0006. The settled run tolerates
-# hours of delay and stays on GitHub cron.
 on:
   schedule:
-    - cron: "0 23 * * 1-5"    # after the close in both halves -> settled (ADR 0003)
-  push:
-    branches: [main]
+    # UTC -> Tue-Sat 08:17 KST, plus 11:17 retry. GitHub may delay jobs.
+    - cron: '17 23 * * 1-5'
+    - cron: '17 2 * * 2-6'
   workflow_dispatch:
     inputs:
       mode:
-        description: "Which run to simulate"
+        description: 'test sends a connection test only; daily collects settled closes'
         type: choice
-        options: [settled, intraday]
-        default: settled
-      full:
-        description: "Re-download full history from scratch"
-        type: boolean
-        default: false
+        options: [test, daily]
+        default: test
 
-concurrency:
-  group: daily-signal
-  cancel-in-progress: false
-
+# No push trigger: uploading setup code must not send an unexpected message.
 permissions:
   contents: write
-  issues: write
-  pages: write
-  id-token: write
+concurrency:
+  group: tripod-daily-telegram
+  cancel-in-progress: false
 
 jobs:
-  signal:
+  notify:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+    timeout-minutes: 20
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-
-      - name: Pick mode
-        id: mode
+          python-version: '3.12'
+      - name: Verify Bot settings
         run: |
-          case "${{ github.event_name }}" in
-            workflow_dispatch) echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT" ;;
-            *)                 echo "mode=settled"           >> "$GITHUB_OUTPUT" ;;
-          esac
-
-      # For the intraday run: sleep to 15:45 ET, then bail out if we are not
-      # actually in the session (a holiday, or a manual dispatch off-hours).
-      # `outcome=skip` short-circuits every later step but still lets the
-      # notifier explain why nothing was sent.
-      # The outputs are written to $GITHUB_OUTPUT directly, NOT by redirecting
-      # stdout: quote and fetch print progress (the sleep to 15:45, Yahoo
-      # retries) and any line that is not key=value fails the step. ADR 0006
-      # made the sleep happen every day, so this failed every day.
-      - name: Wait for the 15:45 ET window
-        id: window
-        if: steps.mode.outputs.mode == 'intraday'
-        run: |
-          python - <<'PY'
-          import os, sys; sys.path.insert(0, "scripts")
-          import quote
-          state = quote.wait_for_window()
-          p = quote.provisional()
-          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write(f"state={state}\n")
-              out.write(f"go={'true' if p['usable'] else 'false'}\n")
-              out.write(f"reason={state}/fresh={p['fresh']}\n")
-          PY
-
-      - name: Skip note
-        if: steps.mode.outputs.mode == 'intraday' && steps.window.outputs.go != 'true'
-        run: |
-          echo "::notice::intraday run skipped (${{ steps.window.outputs.reason }})"
-          echo "Not in the session — a market holiday, or dispatched outside 15:45-16:30 ET."
-
-      # ── settled run only ────────────────────────────────────────────────────
-      # NEVER run this in intraday mode. fetch.py is append-only and an existing
-      # date keeps its stored value, so writing today's in-progress bar at 15:45
-      # would freeze a partial price into ndx.csv permanently. The intraday run
-      # therefore reads committed history (settled through yesterday) and gets
-      # today from the live quote, which is exactly the model measured in
-      # tqqq-trend-lab/intraday_proxy.py.
+          test -n "$TELEGRAM_BOT_TOKEN" || { echo '::error::Set TELEGRAM_BOT_TOKEN in Actions Secrets'; exit 1; }
+          test -n "$TELEGRAM_CHAT_ID" || { echo '::error::Set TELEGRAM_CHAT_ID in Actions Secrets'; exit 1; }
+      - name: Test Telegram connection
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test'
+        run: python scripts/telegram_daily.py --test
       - name: Fetch settled closes
-        if: steps.mode.outputs.mode == 'settled'
-        run: python scripts/fetch.py ${{ inputs.full && '--full' || '' }}
-
-      - name: Derive signal
-        id: signal
-        if: steps.mode.outputs.mode == 'settled' || steps.window.outputs.go == 'true'
+        if: github.event_name != 'workflow_dispatch' || inputs.mode == 'daily'
+        run: python scripts/fetch.py
+      - name: Rebuild upstream signals
+        if: github.event_name != 'workflow_dispatch' || inputs.mode == 'daily'
+        run: python scripts/signal.py --stats
+      - name: Send Tripod settled signal or data-status message
+        if: github.event_name != 'workflow_dispatch' || inputs.mode == 'daily'
+        run: python scripts/telegram_daily.py
+      - name: Report failure without a trading signal
+        if: failure()
+        run: python scripts/telegram_daily.py --fail
+      - name: Save source data and acknowledged-send history
+        if: always()
         run: |
-          python scripts/signal.py ${{ steps.mode.outputs.mode == 'intraday' && '--provisional' || '--stats' }}
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          d = json.load(open("data/signal.json"))
-          acted = [s["key"] for s in d["nav"]
-                   if d["strategies"][s["key"]]["latest"]["action_required"]]
-          print(f"acted={' '.join(acted)}")
-          print(f"any_changed={str(bool(acted)).lower()}")
-          PY
-
-      # ── the notification: one message per run, whatever happened ────────────
-      # The intraday run is the actionable one, so it always speaks. The settled
-      # run stays quiet unless it disagrees with what the intraday run said,
-      # because two identical messages a day trains you to ignore both.
-      - name: Notify (intraday)
-        if: steps.mode.outputs.mode == 'intraday' && steps.window.outputs.go == 'true'
-        run: python scripts/notify.py
-
-      - name: Notify (settled, only if it disagrees)
-        if: steps.mode.outputs.mode == 'settled'
-        run: |
-          python - <<'PY'
-          import json, os, subprocess, sys
-          sys.path.insert(0, "scripts")
-          d = json.load(open("data/signal.json"))
-          vt = d["strategies"]["voltarget"]["latest"]
-          prev = None
-          if os.path.exists("data/last_intraday.json"):
-              prev = json.load(open("data/last_intraday.json"))
-          disagree = prev is not None and abs(prev.get("weight", -1) - vt["weight"]) > 1e-9
-          if disagree or vt["action_required"]:
-              import notify
-              acted, text = notify.build_ok()
-              extra = ""
-              if disagree:
-                  extra = (f"\n\n⚠️ <b>장중 판정과 다르다</b>: 15:45 기준 "
-                           f"{prev['weight']*100:.0f}% → 종가 기준 {vt['weight_pct']:.0f}%. "
-                           f"이미 체결했다면 그대로 두고 다음 판정을 기다려라.")
-              notify.send(text + extra)
-          else:
-              print("settled run agrees with the intraday call; staying quiet")
-          PY
-
-      - name: Remember the intraday call
-        if: steps.mode.outputs.mode == 'intraday' && steps.window.outputs.go == 'true'
-        run: |
-          python - <<'PY'
-          import json
-          d = json.load(open("data/signal.json"))
-          vt = d["strategies"]["voltarget"]["latest"]
-          json.dump({"date": vt["date"], "weight": vt["weight"]},
-                    open("data/last_intraday.json", "w"))
-          PY
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/last_intraday.json
-          git diff --cached --quiet || { git commit -m "intraday call $(date -u +%F)"; git push; }
-
-      - name: Commit settled closes
-        if: steps.mode.outputs.mode == 'settled'
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase --autostash
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add data/*.csv
-          if git diff --cached --quiet; then
-            echo "no new sessions, skipping commit"
-          else
-            git commit -m "data: closes through $(date -u +%Y-%m-%d)"
+          for file in data/telegram_state.json data/telegram_history.jsonl; do
+            if test -f "$file"; then git add "$file"; fi
+          done
+          if ! git diff --cached --quiet; then
+            git commit -m "Record settled data and Telegram delivery state"
             git push
           fi
-
-      - name: Open rebalance issues
-        if: steps.mode.outputs.mode == 'settled' && steps.signal.outputs.any_changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python scripts/issue_body.py
-          gh label create rebalance --color d73a4a --description "Signal wants a trade" --force
-          for key in ${{ steps.signal.outputs.acted }}; do
-            gh label create "strategy:$key" --color 0e8a16 --force
-            gh issue create \
-              --title "$(cat /tmp/$key.title)" \
-              --body-file "/tmp/$key.md" \
-              --label rebalance --label "strategy:$key"
-            for n in $(gh issue list --label rebalance --label "strategy:$key" \
-                         --state open --json number --jq '.[].number' | tail -n +2); do
-              gh issue close "$n" --comment "Superseded by a newer $key signal."
-            done
-          done
-
-      # Deploy ONLY if this run actually derived a signal. data/signal.json is
-      # gitignored (ADR 0001), so it exists only in the workspace of a job that
-      # generated it -- deploying a run that skipped derivation (market holiday,
-      # or an off-hours dispatch) would upload a tree with no data
-      # and replace the live dashboard with its "signal.json not found" error.
-      - uses: actions/configure-pages@v5
-        if: steps.signal.outcome == 'success'
-      - uses: actions/upload-pages-artifact@v3
-        if: steps.signal.outcome == 'success'
+      - name: Keep generated signal for inspection
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          path: .
-      - id: deploy
-        if: steps.signal.outcome == 'success'
-        uses: actions/deploy-pages@v4
-
-      # A silent failure and a quiet day are indistinguishable to the person
-      # holding the position, so failure has to be as loud as a trade.
-      - name: Notify failure
-        if: failure()
-        env:
-          FAILED_STEP: ${{ steps.mode.outputs.mode }} run
-        run: python scripts/notify.py --fail || echo "::error::could not send the failure message"
+          name: tripod-signal-${{ github.run_id }}
+          path: data/signal.json
+          if-no-files-found: ignore
+          retention-days: 30

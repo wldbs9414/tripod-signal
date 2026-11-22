@@ -1,0 +1,87 @@
+트라이팟 종가 Telegram 알림 설정
+
+준비 완료 범위
+- 기준 원본: https://github.com/imtaehyun/tripod-signal
+- 확인한 원본 commit: 1e596ba0624e6e0d156c51f3a57f93b4e7558ba8
+- 원본 params.py / signal.py / fetch.py / notify.py는 변경하지 않았습니다.
+- 신규 telegram_daily.py가 원본 signal.json의 strategies.tripod만 읽고 발송합니다.
+- 기존 Sites 대시보드/Sheets/자동화 예약은 변경하지 않았습니다.
+- 이 자료는 독립 구현을 자동화하는 코드이며 송팀장 공식 신호 서비스가 아닙니다.
+
+1. 본인 GitHub 저장소 만들기
+원본 GitHub에서 Fork를 선택하고 본인 계정에 복사합니다.
+이 패키지의 파일을 본인 Fork의 main에 반영합니다.
+필수 변경 파일:
+  .github/workflows/daily.yml (기존 파일 교체)
+  scripts/telegram_daily.py (추가)
+선택 파일:
+  scripts/telegram_chat_id.py (Chat ID 확인 도우미)
+  tests/test_telegram_daily.py (자동 테스트)
+  TELEGRAM_SETUP.txt
+새 workflow는 main push로는 발송하지 않습니다.
+GitHub 계정을 이 작업에 연결하면 업로드/PR 준비를 이어갈 수 있습니다.
+원본 imtaehyun 저장소에 직접 push하거나 원본 소유자의 Secrets를 바꾸지 마세요.
+
+2. Telegram Bot 만들기
+Telegram에서 공식 @BotFather를 찾아 /newbot을 입력합니다.
+Bot 이름과 username을 정하고 Bot Token을 받습니다.
+새로 만든 본인 Bot을 열어 /start를 보내고 짧은 메시지도 보냅니다.
+Bot Token을 채팅, 코드, 스크린샷, GitHub Issue 또는 로그에 붙이지 마세요.
+이 패키지에는 Token이나 사용자 Chat ID가 없습니다.
+
+3. Chat ID 확인
+로컬 PC에서 Python 3.12를 사용할 수 있다면 저장소 폴더에서 실행합니다.
+  python scripts/telegram_chat_id.py
+Token 입력은 화면에 보이지 않으며 저장되지 않습니다.
+출력된 private Chat ID 중 본인 대화의 ID를 선택합니다.
+다른 Bot 도구에 Token을 전달하지 마세요. 기존 webhook이 있다면 이 도우미가 동작하지 않을 수 있으며 자동 삭제하지 않습니다.
+
+4. GitHub Secrets 입력 (사용자가 직접 수행)
+본인 저장소 > Settings > Secrets and variables > Actions > New repository secret
+아래 이름을 정확히 사용합니다.
+  TELEGRAM_BOT_TOKEN = BotFather가 발급한 Token
+  TELEGRAM_CHAT_ID   = 본인 Bot과의 private Chat ID
+Settings > Actions > General > Workflow permissions에서 Read and write permissions를 허용합니다.
+이는 종가 CSV와 발송 이력을 본인 저장소에 저장하기 위한 권한입니다.
+보호 브랜치가 Actions push를 막으면 저장 단계가 실패할 수 있습니다.
+
+5. 첫 테스트
+Fork의 Actions에서 워크플로 실행을 활성화합니다.
+Actions > Tripod daily Telegram > Run workflow > branch main > mode test
+Telegram에 '연결 테스트' 메시지가 도착하는지 확인합니다.
+연결 확인 후 같은 화면에서 mode daily로 실행합니다.
+원자료 수집 > 신호 계산 > Telegram 발송 > CSV/발송 이력 저장이 모두 성공했는지 확인합니다.
+GitHub 계정과 Bot Secrets가 연결되지 않은 현재 상태에서는 실제 수신은 검증되지 않았습니다.
+
+6. 예약과 수신 내용
+한국시간 화~토 08:17에 실행을 시도하고, 11:17에 같은 미국 거래일을 재확인합니다.
+GitHub cron은 UTC이며 각각 월~금 23:17 / 화~토 02:17입니다.
+GitHub Actions는 실행이 지연되거나 누락될 수 있으므로 정각 도착을 보장하지 않습니다.
+성공한 동일 거래일·동일 신호는 재전송하지 않습니다. 변경 없는 거래일도 '보유 유지'를 전송합니다.
+장중 잠정 신호와 Vol Target은 Telegram 전송에서 제외합니다. Cloudflare Worker와 GitHub Pages 설정은 필요하지 않습니다.
+휴장일은 별도 거래소 달력으로 확정하지 않고, 최신 미국 평일 데이터가 없으면 '새 종가 데이터 미확보'로 알립니다.
+새 종가가 없는데 이전 신호를 오늘의 매수·매도 신호로 발송하지 않습니다.
+GitHub가 작업 자체를 시작하지 못하면 Bot도 실행되지 않으므로 해당 실패를 Telegram으로 보장할 수 없습니다.
+공개 저장소는 장기간 활동이 없으면 예약이 비활성화될 수 있으니 Actions 상태를 확인하세요.
+
+7. 이력과 중복 처리
+  data/telegram_history.jsonl: API가 수신 확인한 발송 이력 (날짜·목표·유형, 비밀값 없음)
+  data/telegram_state.json: 재실행 중복 억제 상태
+  Actions 실행 artifact: 해당 실행의 data/signal.json
+목표는 전일 모델 목표와 비교하며 실제 보유 자산이나 체결을 추적하지 않습니다.
+최초 시작 전부터 발생한 모든 과거 신호를 소급해서 보내지는 않습니다.
+발송 후 Git push가 실패하거나 API 응답 전에 연결이 끊기면 다음 실행에서 중복 알림이 발생할 수 있습니다.
+동일 거래일 재계산 결과가 달라지면 정정 메시지로 구분합니다.
+공개 Fork에서는 신호/발송 시각 이력도 공개됩니다. 실제 계좌 정보는 기록하지 마세요.
+
+8. 향후 업데이트
+이 Fork의 workflow는 개인용 종가 알림으로 교체됐으므로 upstream workflow와 충돌할 수 있습니다.
+원본 계산 규칙 업데이트는 검토 후 반영하고 테스트를 재실행하세요.
+원본이 매일 새 데이터를 수집하지 못해도 본인 Fork는 자체적으로 원본 fetch.py를 실행합니다.
+원본의 최신 CSV 파일만 주기적으로 복사하는 방식과 다릅니다.
+
+참고 자료
+https://github.com/imtaehyun/tripod-signal
+https://core.telegram.org/bots/tutorial
+https://core.telegram.org/bots/api#getupdates
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
