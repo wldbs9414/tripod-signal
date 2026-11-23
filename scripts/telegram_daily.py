@@ -37,9 +37,11 @@ def expected_weekday(now: dt.datetime) -> str:
     return day.isoformat()
 
 
-def digest(strategy: dict) -> str:
+def digest(strategy: dict, auxiliary: dict | None = None) -> str:
     # Exclude generated_at: rerunning the same session is not a new signal.
     value = {k: strategy['latest'][k] for k in ('date', 'gear', 'prev_gear', 'action_required', 'legs')}
+    if auxiliary is not None:
+        value['auxiliary'] = auxiliary
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
@@ -60,7 +62,13 @@ def validate(strategy: dict, now: dt.datetime) -> str | None:
     return None
 
 
-def build_message(strategy: dict) -> str:
+def build_message(strategy: dict, auxiliary: dict | None = None) -> str:
+    from auxiliary import calculate, describe
+    if auxiliary is None:
+        try:
+            auxiliary = calculate(strategy)
+        except (OSError, ValueError, KeyError):
+            auxiliary = {'version':'aux-v1','available':False,'date':strategy['latest']['date'],'reason':'보조 지표 원자료 확인 불가'}
     latest, gears = strategy['latest'], strategy['gears']
     current, previous = gears[latest['gear']], gears[latest['prev_gear']]
     # Reuse original gear rendering and order definitions; avoid duplicating rules.
@@ -76,6 +84,7 @@ def build_message(strategy: dict) -> str:
             f"미국 거래일 종가 확정 기준\n\n{body}\n\n"
             '목표 비중을 전일 모델 목표와 비교한 신호예요. 실제 체결 내역이 아니에요.\n'
             '변경이 있으면 다음 거래일 실행을 검토하세요. 자동 주문은 하지 않아요.\n'
+            f'\n{describe(auxiliary, strategy)}\n\n'
             f'<a href="{SOURCE}">기준 GitHub 저장소</a>')
 
 
@@ -140,16 +149,21 @@ def run(*,dry_run=False,test=False,fail=False,now=None) -> str:
             text = ('<b>트라이팟 · 새 종가 데이터 미확보</b>\n'+html.escape(stale)+
                     '\n휴장 또는 데이터 공개 지연 여부를 확인해야 해요. 이전 신호를 새 매매 신호로 보내지 않아요.')
         else:
+            from auxiliary import calculate
+            try:
+                auxiliary = calculate(strategy)
+            except (OSError, ValueError, KeyError):
+                auxiliary = {'version':'aux-v1','available':False,'date':day,'reason':'보조 지표 원자료 확인 불가'}
             key = 'signal:'+day
-            kind,fingerprint = 'signal',digest(strategy)
+            kind,fingerprint = 'signal',digest(strategy,auxiliary)
             if key in state:
                 if state[key].get('fingerprint') == fingerprint:
                     return 'same session already sent'
                 key = 'revision:'+day+':'+fingerprint
-                text = '<b>동일 거래일 신호 재계산 알림</b>\n재실행 결과가 앞선 발송과 달라요. 중복 주문하지 마세요.\n\n'+build_message(strategy)
+                text = '<b>동일 거래일 재확인 · 지표/표시 갱신</b>\n신호·보조 지표 또는 표시 내용이 이전 발송과 달라요. 중복 주문하지 마세요.\n\n'+build_message(strategy,auxiliary)
                 kind='revision'
             else:
-                text = build_message(strategy)
+                text = build_message(strategy,auxiliary)
         if key in state and not dry_run and kind != 'revision':
             return 'already reported'
     if dry_run:
@@ -157,6 +171,7 @@ def run(*,dry_run=False,test=False,fail=False,now=None) -> str:
     safe_send(text)
     record={'key':key,'kind':kind,'date':day,'sent_at':now.isoformat(),'fingerprint':fingerprint}
     if kind in ('signal','revision'):
+        record['auxiliary'] = auxiliary
         record.update(target=strategy['latest']['gear'],previous=strategy['latest']['prev_gear'],action_required=strategy['latest']['action_required'])
     if kind == 'revision':
         state['signal:'+day] = record
