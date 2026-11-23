@@ -5,5 +5,15 @@
     "date": "2026-11-20",
     "sent_at": "2026-11-23T00:02:56.654588+00:00",
     "fingerprint": null
+  },
+  "signal:2026-11-20": {
+    "key": "signal:2026-11-20",
+    "kind": "signal",
+    "date": "2026-11-20",
+    "sent_at": "2026-11-23T00:04:24.618765+00:00",
+    "fingerprint": "2fd7a1883fd94e8a4b84e010a1b6bdd44e63e39a1075f558c5daa7300423b44e",
+    "target": "CASH",
+    "previous": "G15_UP",
+    "action_required": true
   }
 }
