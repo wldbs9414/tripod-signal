@@ -15,5 +15,12 @@
     "target": "CASH",
     "previous": "G15_UP",
     "action_required": true
+  },
+  "waiting:2026-11-23": {
+    "key": "waiting:2026-11-23",
+    "kind": "waiting",
+    "date": "2026-11-20",
+    "sent_at": "2026-11-24T00:04:49.060597+00:00",
+    "fingerprint": null
   }
 }
