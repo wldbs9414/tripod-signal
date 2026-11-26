@@ -125,5 +125,12 @@
     "target": "CASH",
     "previous": "CASH",
     "action_required": false
+  },
+  "waiting:2026-11-25": {
+    "key": "waiting:2026-11-25",
+    "kind": "waiting",
+    "date": "2026-11-24",
+    "sent_at": "2026-11-26T00:03:34.534718+00:00",
+    "fingerprint": null
   }
 }
