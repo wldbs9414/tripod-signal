@@ -194,5 +194,53 @@
     "date": "2026-11-25",
     "sent_at": "2026-11-28T00:04:41.294143+00:00",
     "fingerprint": null
+  },
+  "signal:2026-11-27": {
+    "key": "signal:2026-11-27",
+    "kind": "signal",
+    "date": "2026-11-27",
+    "sent_at": "2026-11-28T03:05:49.475817+00:00",
+    "fingerprint": "c811a14e664af48b438ab6bbe7d05889eaa477b34ee1ba1d15605ffcde6a60ce",
+    "auxiliary": {
+      "version": "aux-v1",
+      "available": true,
+      "date": "2026-11-27",
+      "previous_date": "2026-11-25",
+      "close": 26726.388672,
+      "moving_averages": {
+        "50": 29009.795625,
+        "200": 28098.605146,
+        "225": 27806.491285,
+        "250": 27568.978578,
+        "275": 27359.394929
+      },
+      "close_vs_ma_pct": {
+        "50": -7.871158,
+        "200": -4.883575,
+        "225": -3.884354,
+        "250": -3.056297,
+        "275": -2.313671
+      },
+      "long_position": "하단",
+      "previous_long_position": "하단",
+      "ma50_vs_ma200": "상회",
+      "previous_ma50_vs_ma200": "상회",
+      "ma_spread_pct": 3.242832,
+      "drawdown_pct": -14.40622,
+      "drawdown_change_pp": 2.176138,
+      "previous_peak_close": 31224.685547,
+      "peak_changed": false,
+      "peak_close": 31224.685547,
+      "peak_date": "2026-10-06",
+      "peak_sessions": 252,
+      "vix10": 26.164,
+      "vix_change": 0.511,
+      "vix_sessions": 10,
+      "vix_alignment": "원본 signal.align의 NDX 거래일 기준 · 과거 VIX 결측 전일 값 이월",
+      "vix_alignment_total_filled_sessions": 4
+    },
+    "target": "CASH",
+    "previous": "CASH",
+    "action_required": false
   }
 }
